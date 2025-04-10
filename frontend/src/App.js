@@ -17,6 +17,7 @@ function App() {
 
   const [username, setUsername] = useState('');
   const [nameInput, setNameInput] = useState('');
+  const [inCall, setInCall] = useState(false); // to track if the video call is ongoing
 
   useEffect(() => {
     const generateKeys = async () => {
@@ -133,34 +134,62 @@ function App() {
 
   const sendMessage = async () => {
     if (!input.trim()) return;
-
+  
     try {
       const encrypted = await openpgp.encrypt({
         message: await openpgp.createMessage({ text: input }),
         encryptionKeys: await openpgp.readKey({ armoredKey: publicKey })
       });
-
+  
       const newMsg = {
         id: crypto.randomUUID(),
         text: encrypted,
         sender: username || 'You',
         timestamp: new Date().toLocaleTimeString(),
       };
-
+  
       await axios.post('http://localhost:5000/messages', newMsg);
       socket.emit('chat message', newMsg);
       setInput('');
+  
+    
+      setMessages(prev => {
+        const updated = [...prev, { ...newMsg, text: input }];
+        localStorage.setItem('chatMessages', JSON.stringify(updated));
+        return updated;
+      });
+  
     } catch (err) {
       console.error('Encryption error:', err);
     }
   };
+  
 
   const deleteMessage = async (id) => {
     try {
       await axios.delete(`http://localhost:5000/messages/${id}`);
       socket.emit('delete message', id);
+  
+      // Immediately update local UI
+      setMessages(prev => {
+        const updated = prev.filter(msg => msg.id !== id);
+        localStorage.setItem('chatMessages', JSON.stringify(updated));
+        return updated;
+      });
     } catch (err) {
       console.error(err);
+    }
+  };
+  
+  const deleteAllMessages = async () => {
+    try {
+      for (let message of messages) {
+        await axios.delete(`http://localhost:5000/messages/${message.id}`);
+        socket.emit('delete message', message.id);
+      }
+      setMessages([]);
+    } catch (err) {
+      console.error('Error deleting all messages:', err);
     }
   };
 
@@ -180,6 +209,50 @@ function App() {
     setUsername('');
     setNameInput('');
     setMessages([]);
+  };
+
+  // Start Video Call
+  const startVideoCall = () => {
+    setInCall(true);
+
+    // Request video and audio stream
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+      .then((stream) => {
+        // Create a video element to show local video
+        const localVideo = document.createElement('video');
+        localVideo.srcObject = stream;
+        localVideo.play();
+
+        // Append the local video to the body (or a container div)
+        document.body.appendChild(localVideo);  // You can add a specific container instead
+
+        // Store the stream to stop it later
+        window.localStream = stream;
+
+        // Optionally, if you're setting up peer-to-peer communication with others, you would use this stream
+        // You can use socket.io or any other signaling method for peer connection setup
+      })
+      .catch(err => {
+        console.error('Error accessing media devices.', err);
+        alert('Could not access camera and microphone.');
+      });
+  };
+
+  // End Video Call
+  const endVideoCall = () => {
+    setInCall(false);
+
+    // Stop the stream and remove the video element
+    if (window.localStream) {
+      const tracks = window.localStream.getTracks();
+      tracks.forEach(track => track.stop());
+    }
+
+    // Remove video element from the DOM
+    const videoElement = document.querySelector('video');
+    if (videoElement) {
+      videoElement.remove();
+    }
   };
 
   if (!username) {
@@ -204,6 +277,9 @@ function App() {
         Welcome, {username}! 👋
         <button onClick={handleLogout} style={{ marginLeft: '10px', fontSize: '12px' }}>
           Logout
+        </button>
+        <button onClick={deleteAllMessages} style={{ marginLeft: '10px', fontSize: '12px' }}>
+          Delete All Messages
         </button>
       </p>
 
@@ -243,6 +319,17 @@ function App() {
         />
         <button onClick={sendMessage}>Send</button>
       </div>
+
+      {/* Video Call Button */}
+      {!inCall ? (
+        <button onClick={startVideoCall} style={{ marginTop: '20px', padding: '10px 20px', backgroundColor: '#1d72b8' }}>
+          Start Video Call
+        </button>
+      ) : (
+        <button onClick={endVideoCall} style={{ marginTop: '20px', padding: '10px 20px', backgroundColor: '#e74c3c' }}>
+          End Video Call
+        </button>
+      )}
     </div>
   );
 }
